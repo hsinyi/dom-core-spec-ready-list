@@ -1,0 +1,11 @@
+{
+  "name": "dom-core-spec-ready-list",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/fetch-bugs.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
