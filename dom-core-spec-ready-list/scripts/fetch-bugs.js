@@ -394,6 +394,12 @@ tr:nth-child(even):hover td{background:var(--surface-alt)}
 </footer>
 
 <script>
+window.onerror = function(msg, src, line, col, err) {
+  var div = document.createElement('div');
+  div.style.cssText = 'background:#c00;color:#fff;padding:8px 16px;font-family:monospace;font-size:12px;position:fixed;top:0;left:0;right:0;z-index:9999;white-space:pre-wrap';
+  div.textContent = '[Error] ' + msg + ' (line ' + line + ')' + (err && err.stack ? '\n' + err.stack : '');
+  document.body ? document.body.insertAdjacentElement('afterbegin', div) : document.documentElement.appendChild(div);
+};
 const BUGS = ${payload};
 const UPDATED_AT = ${JSON.stringify(updatedAt)};
 
@@ -553,7 +559,13 @@ document.getElementById('exportBtn').addEventListener('click', () => {
 });
 
 // ── initial render ──
-render();
+console.log('[tracker] calling render(), BUGS.length=', BUGS.length);
+try {
+  render();
+  console.log('[tracker] render() done, statTotal=', document.getElementById('statTotal').textContent);
+} catch(e) {
+  console.error('[tracker] render() threw:', e);
+}
 </script>
 </body>
 </html>`;
