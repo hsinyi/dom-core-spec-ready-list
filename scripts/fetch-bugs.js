@@ -231,7 +231,7 @@ function generateHtml(bugs, updatedAt) {
     _specStatus: b._specStatus,
     _specTitle: b._specTitle,
     _specUrl: b._specUrl,
-  }))).replace(/<\//g, '<\\/');
+  }))).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
 
   return `<!DOCTYPE html>
 <html lang="en" data-theme="">
@@ -392,7 +392,6 @@ tr:nth-child(even):hover td{background:var(--surface-alt)}
   Updated ${updatedAt} · Data from <a href="https://bugzilla.mozilla.org" target="_blank">Bugzilla</a> and GitHub · Refreshed nightly via GitHub Actions
 </footer>
 
-<script id="bugs-data" type="application/json">${payload}</script>
 <script>
 window.onerror = function(msg, src, line, col, err) {
   var div = document.createElement('div');
@@ -400,7 +399,7 @@ window.onerror = function(msg, src, line, col, err) {
   div.textContent = '[Error] ' + msg + ' (line ' + line + ')' + (err && err.stack ? '\\n' + err.stack : '');
   document.body ? document.body.insertAdjacentElement('afterbegin', div) : document.documentElement.appendChild(div);
 };
-const BUGS = JSON.parse(document.getElementById('bugs-data').textContent);
+const BUGS = ${payload};
 const UPDATED_AT = ${JSON.stringify(updatedAt)};
 
 // ── state ──
