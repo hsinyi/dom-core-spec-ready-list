@@ -396,7 +396,7 @@ tr:nth-child(even):hover td{background:var(--surface-alt)}
 window.onerror = function(msg, src, line, col, err) {
   var div = document.createElement('div');
   div.style.cssText = 'background:#c00;color:#fff;padding:8px 16px;font-family:monospace;font-size:12px;position:fixed;top:0;left:0;right:0;z-index:9999;white-space:pre-wrap';
-  div.textContent = '[Error] ' + msg + ' (line ' + line + ')' + (err && err.stack ? '\n' + err.stack : '');
+  div.textContent = '[Error] ' + msg + ' (line ' + line + ')' + (err && err.stack ? '\\n' + err.stack : '');
   document.body ? document.body.insertAdjacentElement('afterbegin', div) : document.documentElement.appendChild(div);
 };
 const BUGS = ${payload};
