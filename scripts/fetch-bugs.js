@@ -35,10 +35,14 @@ const BZ_BASE        = 'https://bugzilla.mozilla.org/rest/bug';
 const GH_TOKEN       = process.env.GITHUB_TOKEN || '';
 const GH_SPEC_RE     = /github\.com\/(?:whatwg|w3c)\//i;
 const GH_LINK_RE     = /https?:\/\/github\.com\/(?:whatwg|w3c)\/[^\s<>"')]+\/(?:pull|issues?)\/\d+/gi;
+const WPT_SYNC_RE   = /wptsync@mozilla\.bugs|wptsync@mozilla\.com/i;
+const WPT_REPO_RE   = /github\.com\/web-platform-tests\//i;
+
 const INCLUDE_FIELDS = [
   'id', 'summary', 'component', 'priority', 'severity',
   'keywords', 'see_also', 'creation_time', 'last_change_time',
   'assigned_to', 'status', 'type', 'bug_type',
+  'cf_status_firefox_nightly',
 ].join(',');
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -166,10 +170,10 @@ let rateLimited = false;
 
 async function checkGhLink(url) {
   if (ghCache.has(url)) return ghCache.get(url);
-  if (rateLimited) return { status: 'rate-limited', title: '' };
+  if (rateLimited) return { status: 'rate-limited', title: '', closedAt: '' };
 
   const m = url.match(/github\.com\/([^/]+\/[^/]+)\/(pull|issues?)\/(\d+)/i);
-  if (!m) return { status: 'none', title: '' };
+  if (!m) return { status: 'none', title: '', closedAt: '' };
 
   const [, repo, type, num] = m;
   const isPr = type.startsWith('pull');
@@ -186,14 +190,15 @@ async function checkGhLink(url) {
     if (resp.status === 403 || resp.status === 429) {
       logln('\n  [warn] GitHub rate limit hit');
       rateLimited = true;
-      return cache(url, { status: 'rate-limited', title: '' });
+      return cache(url, { status: 'rate-limited', title: '', closedAt: '' });
     }
-    if (!resp.ok) return cache(url, { status: 'error', title: '' });
+    if (!resp.ok) return cache(url, { status: 'error', title: '', closedAt: '' });
     const d = await resp.json();
     const status = isPr
       ? (d.merged ? 'merged' : d.state === 'closed' ? 'pr-closed' : 'open')
       : (d.state === 'closed' ? 'closed' : 'open');
-    return cache(url, { status, title: d.title || '' });
+    const closedAt = isPr ? (d.merged_at || d.closed_at || '') : (d.closed_at || '');
+    return cache(url, { status, title: d.title || '', closedAt });
   } catch (e) {
     return cache(url, { status: 'error', title: '' });
   }
@@ -209,6 +214,7 @@ function extractGhLinks(seeAlso = []) {
   const links = [];
   for (const url of seeAlso) {
     if (!url.includes('whatwg') && !url.includes('w3c/')) continue;
+    if (WPT_REPO_RE.test(url)) continue;
     const m = url.match(/github\.com\/([^/]+\/[^/]+)\/(pull|issues?)\/(\d+)/i);
     if (m) links.push({ url, repo: m[1], type: m[2].startsWith('pull') ? 'pull' : 'issue', number: +m[3] });
   }
@@ -231,6 +237,8 @@ function generateHtml(bugs, updatedAt) {
     _specStatus: b._specStatus,
     _specTitle: b._specTitle,
     _specUrl: b._specUrl,
+    _specClosedAt: b._specClosedAt || '',
+    _firefoxNightly: b._firefoxNightly || '',
   }))).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
 
   return `<!DOCTYPE html>
@@ -280,7 +288,7 @@ thead{position:sticky;top:48px;z-index:5;background:var(--surface-alt)}
 th{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint);padding:8px 12px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
 th.sortable{cursor:pointer;user-select:none}th.sortable:hover{color:var(--text-muted)}
 th .sort-indicator{margin-left:4px;opacity:.5}
-col.col-status{width:5px}col.col-id{width:88px}col.col-summary{width:auto}col.col-comp{width:180px}col.col-spec{width:140px}col.col-type{width:90px}col.col-pri{width:56px}col.col-updated{width:90px}
+col.col-status{width:5px}col.col-id{width:88px}col.col-summary{width:auto}col.col-comp{width:180px}col.col-spec{width:140px}col.col-specdate{width:82px}col.col-type{width:90px}col.col-pri{width:56px}col.col-updated{width:90px}
 td{padding:0 12px;height:var(--row-h);vertical-align:middle;border-bottom:1px solid var(--border-light);color:var(--text)}
 td.status-bar{padding:0;width:5px}
 .status-stripe{display:block;width:4px;height:var(--row-h)}
@@ -302,6 +310,7 @@ tr:nth-child(even):hover td{background:var(--surface-alt)}
 .spec-closed{color:var(--closed-fg);background:var(--closed-bg)}
 .spec-open{color:var(--open-fg);background:var(--open-bg)}
 .spec-none{color:var(--none-fg);background:var(--none-bg)}
+.shipped-badge{display:inline-block;font-size:10px;font-weight:600;padding:1px 5px;border-radius:3px;background:#6c3;color:#fff;margin-left:5px;vertical-align:middle;letter-spacing:.03em}
 .type-badge{font-size:11px;font-weight:500;padding:2px 7px;border-radius:4px;border:1px solid var(--border);color:var(--text-muted);white-space:nowrap}
 .type-badge.enhancement{color:var(--closed-fg);border-color:var(--closed-bar);background:var(--closed-bg)}
 .pri-cell{font-family:var(--font-mono);font-size:12px;color:var(--text-muted);font-variant-numeric:tabular-nums}
@@ -310,7 +319,7 @@ tr:nth-child(even):hover td{background:var(--surface-alt)}
 .empty-msg{padding:60px 28px;text-align:center;color:var(--text-muted)}
 .page-footer{padding:16px 28px;border-top:1px solid var(--border);font-size:12px;color:var(--text-faint)}
 .page-footer a{color:var(--text-muted)}.page-footer a:hover{color:var(--accent)}
-@media(max-width:640px){.page-header{padding:16px}.stats-bar,.filter-bar{padding:10px 16px}.filter-sep,.stats-divider{display:none}th,td{padding:0 8px}col.col-comp{width:120px}col.col-type,col.col-updated{display:none}}
+@media(max-width:640px){.page-header{padding:16px}.stats-bar,.filter-bar{padding:10px 16px}.filter-sep,.stats-divider{display:none}th,td{padding:0 8px}col.col-comp{width:120px}col.col-type,col.col-updated,col.col-specdate{display:none}}
 </style>
 </head>
 <body>
@@ -344,6 +353,11 @@ tr:nth-child(even):hover td{background:var(--surface-alt)}
     <button class="chip active" data-spec="none">Unverified</button>
   </div>
   <div class="filter-sep"></div>
+  <div class="filter-group">
+    <span class="filter-label">Firefox</span>
+    <button class="chip active" id="hideShippedBtn">Hide shipped in Nightly</button>
+  </div>
+  <div class="filter-sep"></div>
   <div class="filter-group" id="compFilterGroup">
     <span class="filter-label">Component</span>
     <button class="chip active" data-comp="all">All</button>
@@ -367,8 +381,8 @@ tr:nth-child(even):hover td{background:var(--surface-alt)}
     <table id="bugTable">
       <colgroup>
         <col class="col-status"><col class="col-id"><col class="col-summary">
-        <col class="col-comp"><col class="col-spec"><col class="col-type">
-        <col class="col-pri"><col class="col-updated">
+        <col class="col-comp"><col class="col-spec"><col class="col-specdate">
+        <col class="col-type"><col class="col-pri"><col class="col-updated">
       </colgroup>
       <thead>
         <tr>
@@ -377,6 +391,7 @@ tr:nth-child(even):hover td{background:var(--surface-alt)}
           <th>Summary</th>
           <th class="sortable" data-col="component">Component <span class="sort-indicator"></span></th>
           <th class="sortable" data-col="_specStatus">Spec status <span class="sort-indicator"></span></th>
+          <th class="sortable" data-col="_specClosedAt">Spec date <span class="sort-indicator"></span></th>
           <th>Type</th>
           <th class="sortable" data-col="priority">Pri <span class="sort-indicator"></span></th>
           <th class="sortable" data-col="last_change_time">Updated <span class="sort-indicator"></span></th>
@@ -406,6 +421,7 @@ const UPDATED_AT = ${JSON.stringify(updatedAt)};
 const activeSpec = new Set(['merged','closed','pr-closed','open','none']);
 let activeComp = 'all';
 let activeSince = '';
+let hideShipped = true;
 let sortCol = '_specStatus';
 let sortDir = -1; // -1 = desc (best first)
 
@@ -424,6 +440,12 @@ function specBadge(b) {
   const label = labels[s] || '—';
   if (b._specUrl) return \`<span class="spec-badge spec-\${cls}"><a href="\${b._specUrl}" target="_blank" rel="noopener">\${label}</a></span>\`;
   return \`<span class="spec-badge spec-\${cls}">\${label}</span>\`;
+}
+const SHIPPED_VALUES = new Set(['fixed','verified','verified fixed']);
+function isShippedNightly(b) { return SHIPPED_VALUES.has((b._firefoxNightly||'').toLowerCase()); }
+function shippedBadge(b) {
+  if (!isShippedNightly(b)) return '';
+  return \`<span class="shipped-badge" title="cf_status_firefox_nightly: \${esc(b._firefoxNightly)}">Nightly ✓</span>\`;
 }
 function typeBadge(b) {
   const t = (b.type || '').toLowerCase();
@@ -449,6 +471,7 @@ function render() {
     if (!activeSpec.has(specClass(b))) return false;
     if (activeComp !== 'all' && b.component !== activeComp) return false;
     if (sinceMs && new Date(b.creation_time).getTime() < sinceMs) return false;
+    if (hideShipped && isShippedNightly(b)) return false;
     return true;
   });
 
@@ -464,12 +487,14 @@ function render() {
   tbody.innerHTML = rows.map(b => {
     const cls = specClass(b);
     const updated = b.last_change_time ? b.last_change_time.slice(0,10) : '';
+    const specDate = b._specClosedAt ? b._specClosedAt.slice(0,10) : '';
     return \`<tr class="status-\${cls}">
       <td class="status-bar"><span class="status-stripe"></span></td>
-      <td><a class="bug-id" href="https://bugzilla.mozilla.org/show_bug.cgi?id=\${b.id}" target="_blank" rel="noopener">\${b.id}</a></td>
+      <td><a class="bug-id" href="https://bugzilla.mozilla.org/show_bug.cgi?id=\${b.id}" target="_blank" rel="noopener">\${b.id}</a>\${shippedBadge(b)}</td>
       <td class="summary-cell"><div class="summary-inner"><a href="https://bugzilla.mozilla.org/show_bug.cgi?id=\${b.id}" target="_blank" rel="noopener">\${esc(b.summary)}</a></div></td>
       <td><span class="comp-badge" title="\${esc(b.component)}">\${esc(b.component.replace(/^DOM: /,''))}</span></td>
       <td>\${specBadge(b)}</td>
+      <td class="date-cell">\${specDate}</td>
       <td>\${typeBadge(b)}</td>
       <td class="pri-cell \${priClass(b.priority)}">\${b.priority||'—'}</td>
       <td class="date-cell">\${updated}</td>
@@ -514,6 +539,13 @@ document.querySelectorAll('[data-spec]').forEach(btn => {
   });
 });
 
+// ── shipped filter ──
+document.getElementById('hideShippedBtn').addEventListener('click', function() {
+  hideShipped = !hideShipped;
+  this.classList.toggle('active', hideShipped);
+  render();
+});
+
 // ── component filter ──
 document.getElementById('compFilterGroup').addEventListener('click', e => {
   const btn = e.target.closest('[data-comp]');
@@ -545,10 +577,11 @@ document.getElementById('exportBtn').addEventListener('click', () => {
     return true;
   });
   const q = v => '"' + String(v||'').replace(/"/g,'""') + '"';
-  const header = ['Bug ID','Summary','Component','Priority','Severity','Type','Spec status','Spec URL','Created','Last changed','Assigned to'];
+  const header = ['Bug ID','Summary','Component','Priority','Severity','Type','Spec status','Spec date','Spec URL','Firefox Nightly','Created','Last changed','Assigned to'];
   const csv = [header, ...visible.map(b => [
     b.id, q(b.summary), q(b.component), b.priority, b.severity,
-    b.type, b._specStatus, b._specUrl, b.creation_time?.slice(0,10),
+    b.type, b._specStatus, b._specClosedAt?.slice(0,10)||'', b._specUrl,
+    b._firefoxNightly, b.creation_time?.slice(0,10),
     b.last_change_time?.slice(0,10), q(b.assigned_to),
   ])].map(r => r.join(',')).join('\\r\\n');
   const a = document.createElement('a');
@@ -605,30 +638,37 @@ async function main() {
 
   // Annotate bugs
   for (const bug of rawBugs) {
-    bug._specStatus = 'none';
-    bug._specTitle  = '';
-    bug._specUrl    = '';
+    bug._specStatus   = 'none';
+    bug._specTitle    = '';
+    bug._specUrl      = '';
+    bug._specClosedAt = '';
+    bug._firefoxNightly = bug.cf_status_firefox_nightly || '';
     for (const link of extractGhLinks(bug.see_also)) {
       const l = allLinks.get(link.url);
       if (l && rankStatus(l.ghStatus) > rankStatus(bug._specStatus)) {
-        bug._specStatus = l.ghStatus;
-        bug._specTitle  = l.ghTitle;
-        bug._specUrl    = link.url;
+        bug._specStatus   = l.ghStatus;
+        bug._specTitle    = l.ghTitle;
+        bug._specUrl      = link.url;
+        bug._specClosedAt = l.closedAt || '';
       }
     }
   }
 
+  // Exclude wpt-sync bot bugs
+  const bugs = rawBugs.filter(b => !WPT_SYNC_RE.test(b.assigned_to || ''));
+
   const updatedAt = new Date().toISOString();
   logln('\nGenerating index.html...');
-  const html = generateHtml(rawBugs, updatedAt);
+  const html = generateHtml(bugs, updatedAt);
   fs.writeFileSync(path.join(ROOT, 'index.html'), html, 'utf8');
 
+  const wptFiltered = rawBugs.length - bugs.length;
   logln('\nDone.');
-  logln(`  Total:  ${rawBugs.length}`);
-  logln(`  Merged: ${rawBugs.filter(b => b._specStatus === 'merged').length}`);
-  logln(`  Closed: ${rawBugs.filter(b => ['closed','pr-closed'].includes(b._specStatus)).length}`);
-  logln(`  Open:   ${rawBugs.filter(b => b._specStatus === 'open').length}`);
-  logln(`  None:   ${rawBugs.filter(b => b._specStatus === 'none').length}`);
+  logln(`  Total:  ${bugs.length} (${wptFiltered} wpt-sync bugs excluded)`);
+  logln(`  Merged: ${bugs.filter(b => b._specStatus === 'merged').length}`);
+  logln(`  Closed: ${bugs.filter(b => ['closed','pr-closed'].includes(b._specStatus)).length}`);
+  logln(`  Open:   ${bugs.filter(b => b._specStatus === 'open').length}`);
+  logln(`  None:   ${bugs.filter(b => b._specStatus === 'none').length}`);
   if (rateLimited) logln('\n  [!] GitHub rate limit was hit — some statuses may be missing. Add GITHUB_TOKEN for 5000 req/hr.');
 }
 
