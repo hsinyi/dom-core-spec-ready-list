@@ -630,8 +630,9 @@ async function main() {
   let ghDone = 0;
   await runPool([...allLinks.values()], 8, async (link) => {
     const result = await checkGhLink(link.url);
-    link.ghStatus = result.status;
-    link.ghTitle  = result.title;
+    link.ghStatus  = result.status;
+    link.ghTitle   = result.title;
+    link.closedAt  = result.closedAt;
     log(`\r  ${++ghDone}/${allLinks.size} done`);
   });
   logln();
