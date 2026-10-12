@@ -40,7 +40,7 @@ const WPT_REPO_RE   = /github\.com\/web-platform-tests\//i;
 
 const INCLUDE_FIELDS = [
   'id', 'summary', 'component', 'priority', 'severity',
-  'keywords', 'see_also', 'creation_time', 'last_change_time',
+  'keywords', 'see_also', 'url', 'creation_time', 'last_change_time',
   'assigned_to', 'status', 'type', 'bug_type',
   'cf_status_firefox_nightly',
 ].join(',');
@@ -105,6 +105,29 @@ async function fetchBugs() {
   );
   logln();
 
+  logln('Phase 1b — url (Related URL) field queries');
+  done = 0;
+  const urlFieldResults = await Promise.allSettled(
+    COMPONENTS.map(async (component) => {
+      const p = new URLSearchParams({
+        product: 'Core', resolution: '---',
+        f1: 'bug_file_loc', o1: 'anywordssubstr', v1: 'whatwg w3c/',
+        include_fields: INCLUDE_FIELDS, limit: 500,
+      });
+      p.append('component', component);
+      try {
+        const r = await bzQuery(p);
+        log(`\r  ${++done}/${n} done`);
+        return r;
+      } catch (e) {
+        log(`\r  ${++done}/${n} done`);
+        logln(`\n  [warn] url field "${component}": ${e.message}`);
+        return [];
+      }
+    })
+  );
+  logln();
+
   logln('Phase 2 — longdesc (description + comments) queries');
   done = 0;
   const longdescResults = await Promise.allSettled(
@@ -112,7 +135,7 @@ async function fetchBugs() {
       const p = new URLSearchParams({
         product: 'Core', resolution: '---',
         f1: 'longdesc', o1: 'anywordssubstr', v1: 'whatwg w3c/',
-        include_fields: INCLUDE_FIELDS, limit: 500,
+        include_fields: INCLUDE_FIELDS, limit: 1000,
       });
       p.append('component', component);
       try {
@@ -131,7 +154,7 @@ async function fetchBugs() {
   // Merge, deduplicating by id
   const seen = new Set();
   const bugs = [];
-  for (const r of [...seeAlsoResults, ...longdescResults]) {
+  for (const r of [...seeAlsoResults, ...urlFieldResults, ...longdescResults]) {
     for (const bug of (r.status === 'fulfilled' ? r.value : [])) {
       if (!seen.has(bug.id)) { seen.add(bug.id); bugs.push(bug); }
     }
@@ -611,6 +634,13 @@ async function main() {
   logln('\nFetching bugs from Bugzilla...');
   const rawBugs = await fetchBugs();
   logln(`  Total unique bugs: ${rawBugs.length}`);
+
+  // Promote Related URL (bug.url) into see_also when it's a GitHub spec link
+  for (const bug of rawBugs) {
+    if (bug.url && GH_SPEC_RE.test(bug.url)) {
+      bug.see_also = [...new Set([...(bug.see_also || []), bug.url])];
+    }
+  }
 
   const descBugs = rawBugs.filter(b => !b.see_also?.some(u => GH_SPEC_RE.test(u)));
   if (descBugs.length) {
